@@ -1,0 +1,381 @@
+{% extends "sgiiee/base.html" %}
+{% load static %}
+
+{% block title %}Detalle del Evento{% endblock %}
+
+{% block contenido %}
+
+<style>
+    
+    #mapa-asientos {
+        width: 100%;
+        border: 2px solid #333;
+        background: #f4f4f4;
+        border-radius: 12px;
+    }
+
+    .zona-info {
+        font-weight: bold;
+        padding: 5px 10px;
+        border-radius: 6px;
+        margin-right: 10px;
+    }
+
+    .vip { background-color: #ffd700; color: black; }
+    .avanzado { background-color: #2ecc71; color: white; }
+    .normal { background-color: #7f8c8d; color: white; }
+
+    .asiento-selected {
+        outline: 4px solid #3498db;
+        border-radius: 6px;
+    }
+
+
+    .tabla-asientos td {
+        font-size: 14px;
+        padding: 6px;
+    }
+
+    .filtro-btn {
+        margin-right: 8px;
+    }
+</style>
+
+<div class="container mt-4">
+
+    <!-- Información del evento -->
+    <div class="card shadow p-4 mb-4">
+        <h2 class="fw-bold text-center">{{ evento.nombre }}</h2>
+        <p><strong>Fecha:</strong> {{ evento.fecha|date:"d/m/Y" }}</p>
+        <p><strong>Hora:</strong> {{ evento.hora|time:"H:i" }}</p>
+        <p><strong>Lugar:</strong> {{ evento.lugar }}</p>
+        <p><strong>Forma del recinto:</strong> {{ evento.get_forma_recinto_display }}</p>
+        <p><strong>Capacidad:</strong> {{ evento.capacidad }}</p>
+    </div>
+
+    <!-- LEYENDA DE ZONAS -->
+    <div class="card shadow p-3 mb-4 text-center">
+        <span class="zona-info vip">Zona VIP — Precio: {{ evento.precio_base|floatformat:0 }} * 3</span>
+        <span class="zona-info avanzado">Zona Avanzado — Precio: {{ evento.precio_base|floatformat:0 }} * 1.8</span>
+        <span class="zona-info normal">Zona Normal — Precio: {{ evento.precio_base|floatformat:0 }} * 1.2</span>
+    </div>
+
+    <!-- MAPA DE ASIENTOS -->
+    <div class="card shadow p-4 mb-4">
+        <h4 class="fw-bold text-center mb-3">Mapa de Asientos</h4>
+
+        <canvas id="mapa-asientos" width="1050" height="750"></canvas>
+
+        <div class="text-center mt-3">
+            <h5>Seleccionados: 
+                <span id="contadorSeleccionados" class="fw-bold text-primary">0</span>
+            </h5>
+
+            <button id="btnAgregarCarrito" class="btn btn-success btn-lg mt-2">
+                Agregar seleccionados al carrito
+            </button>
+        </div>
+    </div>
+
+    <!-- FILTROS -->
+    <div class="card shadow p-3 mb-3">
+        <h5 class="fw-bold">Filtrar Asientos</h5>
+        <button class="btn btn-secondary filtro-btn" data-filtro="todos">Todos</button>
+        <button class="btn btn-success filtro-btn" data-filtro="disponible">Disponibles</button>
+        <button class="btn btn-warning filtro-btn" data-filtro="apartado">Apartados</button>
+        <button class="btn btn-danger filtro-btn" data-filtro="vendido">Vendidos</button>
+        <button class="btn btn-info filtro-btn" data-filtro="vip">Zona VIP</button>
+        <button class="btn btn-primary filtro-btn" data-filtro="avanzado">Zona Avanzado</button>
+        <button class="btn btn-dark filtro-btn" data-filtro="normal">Zona Normal</button>
+    </div>
+
+    <!-- TABLA DE ASIENTOS -->
+    <div class="card shadow p-4 mb-4">
+        <h4 class="fw-bold">Todos los Asientos</h4>
+
+        <table class="table table-striped tabla-asientos">
+            <thead>
+                <tr>
+                    <th>Código</th>
+                    <th>Zona</th>
+                    <th>Estado</th>
+                    <th>Precio</th>
+                </tr>
+            </thead>
+            <tbody id="tablaAsientos">
+                {% for a in asientos %}
+                    <tr data-estado="{{ a.estado }}" data-zona="{{ a.zona }}">
+                        <td>{{ a.fila }}{{ a.numero }}</td>
+                        <td>{{ a.zona|title }}</td>
+                        <td>{{ a.get_estado_display }}</td>
+                        <td>${{ a.precio|floatformat:0 }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+</div>
+
+<script>
+    // Datos enviados desde Django
+ 
+    const asientos = [
+        {% for a in asientos %}
+        {
+            id: "{{ a.id }}",
+            x: "{{ a.pos_x }}",
+            y: "{{ a.pos_y }}",
+            zona: "{{ a.zona|escapejs }}",
+            estado: "{{ a.estado|escapejs }}",
+            codigo: "{{ a.fila }}{{ a.numero }}",
+            precio: "{{ a.precio }}"
+        }{% if not forloop.last %},{% endif %}
+        {% endfor %}
+    ];
+
+    // Convertir strings a números
+    asientos.forEach(a => {
+        a.id = parseInt(a.id);
+        a.x = parseFloat(a.x);
+        a.y = parseFloat(a.y);
+        a.precio = parseFloat(a.precio);
+    });
+
+    const canvas = document.getElementById("mapa-asientos");
+    const ctx = canvas.getContext("2d");
+
+    let seleccionados = new Set();
+
+    function dibujarMapa() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        asientos.forEach(a => {
+
+            let baseColor = "#777";
+
+            if (a.zona === "vip") baseColor = "#ffd700";
+            if (a.zona === "avanzado") baseColor = "#27ae60";
+            if (a.zona === "normal") baseColor = "#7f8c8d";
+
+            if (a.estado === "vendido") baseColor = "#e74c3c";
+            if (a.estado === "apartado") baseColor = "#f1c40f";
+
+            const px = (a.x / 100) * canvas.width;
+            const py = (a.y / 100) * canvas.height;
+
+            // Dibuja asiento
+            ctx.beginPath();
+            ctx.arc(px, py, 14, 0, Math.PI * 2);
+            ctx.fillStyle = baseColor;
+            ctx.fill();
+
+            // Seleccionado
+            if (seleccionados.has(a.id)) {
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = "#2980b9";
+                ctx.stroke();
+            }
+
+            // Código 
+            ctx.fillStyle = (a.zona === "vip") ? "black" : "white";
+            ctx.font = "bold 11px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(a.codigo, px, py);
+        });
+    }
+
+    canvas.addEventListener("click", function (e) {
+
+        const rect = canvas.getBoundingClientRect();
+
+        // FACTOR DE ESCALA REAL 
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+
+        // coordenadas reales dentro del canvas
+        const cx = (e.clientX - rect.left) * scaleX;
+        const cy = (e.clientY - rect.top) * scaleY;
+
+        for (let a of asientos) {
+
+            const px = (a.x / 100) * canvas.width;
+            const py = (a.y / 100) * canvas.height;
+
+            const dist = Math.sqrt(Math.pow(cx - px, 2) + Math.pow(cy - py, 2));
+
+            // radio del asiento
+            if (dist <= 14 && a.estado === "disponible") {
+
+                if (seleccionados.has(a.id)) {
+                    seleccionados.delete(a.id);
+                } else {
+                    seleccionados.add(a.id);
+                }
+
+                document.getElementById("contadorSeleccionados").innerText = seleccionados.size;
+                dibujarMapa();
+                return;
+            }
+        }
+    });
+
+
+
+    dibujarMapa();
+
+    // ----------------------------------------------------------
+    //  MANDAR AL CARRITO
+    // ----------------------------------------------------------
+
+    function csrftoken() {
+        const v = document.cookie.match("(^|;)\\s*csrftoken\\s*=\\s*([^;]+)");
+        return v ? v.pop() : "";
+    }
+
+    document.getElementById("btnAgregarCarrito").addEventListener("click", function () {
+        if (seleccionados.size === 0) {
+            alert("No has seleccionado asientos.");
+            return;
+        }
+
+        fetch("{% url 'sgiiee:api_agregar_asientos_carrito' %}", {
+            method: "POST",
+            headers: {
+                "X-CSRFToken": csrftoken(),
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                asientos: Array.from(seleccionados)
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                alert("Asientos agregados correctamente.");
+                window.location.reload();
+            } else {
+                alert(data.error);
+            }
+        })
+        .catch(() => alert("Error al comunicarse con el servidor."));
+    });
+
+    // ----------------------------------------------------------
+    //  FILTROS
+    // ----------------------------------------------------------
+
+    const filasTabla = document.querySelectorAll("#tablaAsientos tr");
+
+    document.querySelectorAll(".filtro-btn").forEach(boton => {
+        boton.addEventListener("click", () => {
+            const filtro = boton.dataset.filtro;
+
+            filasTabla.forEach(fila => {
+                if (filtro === "todos") {
+                    fila.style.display = "";
+                } else {
+                    fila.style.display =
+                        (fila.dataset.estado === filtro || fila.dataset.zona === filtro)
+                            ? ""
+                            : "none";
+                }
+            });
+        });
+    });
+</script>
+
+{% endblock %}
+<script>
+function seleccionarAsiento(id) {
+    fetch("{% url 'sgiiee:api_agregar_asientos_carrito' %}", {
+        method: "POST",
+        headers: {
+            "X-CSRFToken": "{{ csrf_token }}",
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ asientos: [id] })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            alert("Asiento agregado al carrito");
+        } else {
+            alert("Error: " + data.error);
+        }
+    });
+}
+</script>
+  /* ================================================
+       OBTENER CSRF TOKEN
+    ================================================= */
+    function obtenerCookie(name) {
+        const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+        return match ? match.pop() : '';
+    }
+    const csrftoken = obtenerCookie("csrftoken");
+
+
+    /* ================================================
+       ENVIAR ASIENTOS AL CARRITO (POST)
+    ================================================= */
+    btnAgregar.addEventListener("click", () => {
+
+        fetch("{% url 'sgiiee:api_agregar_asientos_carrito' %}", {
+            method: "POST",
+            headers: {
+                "X-CSRFToken": csrftoken,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                asientos: Array.from(seleccionados)
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                toast("Asientos añadidos al carrito.");
+                window.location.href = "{% url 'sgiiee:ver_carrito' %}";
+            } else {
+                toast(data.error, true);
+            }
+        })
+        .catch(() => toast("Error de comunicación con el servidor", true));
+    });
+
+
+    /* ================================================
+       TOAST (Bootstrap)
+    ================================================= */
+    function toast(texto, error=false) {
+
+        const id = "toast-contenedor";
+        let cont = document.getElementById(id);
+
+        if (!cont) {
+            cont = document.createElement("div");
+            cont.id = id;
+            cont.style.position = "fixed";
+            cont.style.top = "30px";
+            cont.style.right = "30px";
+            cont.style.zIndex = 5000;
+            document.body.appendChild(cont);
+        }
+
+        const t = document.createElement("div");
+        t.className = "toast text-bg-" + (error ? "danger" : "success") + " show mb-2";
+        t.innerHTML = `
+            <div class="d-flex">
+                <div class="toast-body">${texto}</div>
+                <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        `;
+
+        cont.appendChild(t);
+
+        setTimeout(() => t.remove(), 3000);
+    }
+
+
+</script>
